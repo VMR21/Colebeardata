@@ -8,11 +8,11 @@ const API_KEY = "k4j4j3Yk7e9BePgYg2cAmlsUC8WGNC5f";
 
 let cachedData = [];
 
-// ====== CYCLE CONFIG (UTC) ======
-const BASE_START_MS = Date.UTC(2025, 7, 11, 0, 0, 0); // 11 Aug 2025 00:00:00 UTC
-const CYCLE_MS = 14 * 24 * 60 * 60 * 1000;           // 14 days
+// ====== CYCLE CONFIG ======
+const BASE_START = Date.UTC(2025, 7, 11, 0, 0, 0); // 11 Aug 2025 00:00:00 UTC
+const CYCLE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
-// ✅ CORS headers manually (unchanged)
+// CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -20,127 +20,78 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- helpers (unchanged behavior except date window) ----------
-function maskUsername(username = "") {
+function maskUsername(username) {
+  if (!username) return "";
   if (username.length <= 4) return username;
   return username.slice(0, 2) + "***" + username.slice(-2);
 }
-function ymdUTC(d) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+function ymdUTC(date) {
+  return date.toISOString().slice(0, 10);
 }
-function cycleIndex(nowMs) {
-  return Math.floor((nowMs - BASE_START_MS) / CYCLE_MS);
-}
-/** Get start/end Date objects for cycle offset from NOW (UTC) */
-function getCycleBounds(offset = 0, nowMs = Date.now()) {
-  const k0 = cycleIndex(nowMs);
-  const k = k0 + offset; // can be negative (before first cycle)
-  const startMs = BASE_START_MS + k * CYCLE_MS;
-  const endMs = startMs + CYCLE_MS - 1; // inclusive
-  return { startDate: new Date(startMs), endDate: new Date(endMs), k };
+function getCycle(offset = 0, nowMs = Date.now()) {
+  const k = Math.floor((nowMs - BASE_START) / CYCLE_MS) + offset;
+  const start = new Date(BASE_START + k * CYCLE_MS);
+  const end = new Date(start.getTime() + CYCLE_MS - 1);
+  return { start, end };
 }
 
-// ====== ONLY THIS CHANGED: build the current-cycle URL instead of month ======
-function getDynamicApiUrl() {
-  const nowMs = Date.now(); // UTC epoch ms
-  const { startDate, endDate, k } = getCycleBounds(0, nowMs);
-
-  // If we haven't reached the first cycle yet → return a harmless URL
-  if (k < 0) {
-    const s = new Date(BASE_START_MS);
-    console.log(`[ℹ] Before first cycle. Will use empty window around ${ymdUTC(s)}.`);
-  }
-
-  const startStr = ymdUTC(startDate);
-  const endStr = ymdUTC(endDate);
-  const url = `https://services.rainbet.com/v1/external/affiliates?start_at=${startStr}&end_at=${endStr}&key=${API_KEY}`;
-  console.log(`[➡️] TOP14 URL: ${url}`);
-  return url;
+function buildUrl(start, end) {
+  return `https://services.rainbet.com/v1/external/affiliates?start_at=${ymdUTC(
+    start
+  )}&end_at=${ymdUTC(end)}&key=${API_KEY}`;
 }
 
-async function fetchAndCacheData() {
+async function fetchWindow(start, end) {
+  const url = buildUrl(start, end);
+  console.log(`[🌐] Fetching: ${url}`);
+
+  const res = await fetch(url);
+  const json = await res.json();
+  if (!json.affiliates) return [];
+
+  const sorted = json.affiliates.sort(
+    (a, b) => parseFloat(b.wagered_amount) - parseFloat(a.wagered_amount)
+  );
+  const top10 = sorted.slice(0, 10);
+  if (top10.length >= 2) [top10[0], top10[1]] = [top10[1], top10[0]];
+
+  return top10.map((e) => ({
+    username: maskUsername(e.username),
+    wagered: Math.round(parseFloat(e.wagered_amount)),
+    weightedWager: Math.round(parseFloat(e.wagered_amount)),
+  }));
+}
+
+async function fetchAndCache() {
   try {
-    const response = await fetch(getDynamicApiUrl());
-    const json = await response.json();
-    if (!json.affiliates) throw new Error("No data");
-
-    const sorted = json.affiliates.sort(
-      (a, b) => parseFloat(b.wagered_amount) - parseFloat(a.wagered_amount)
-    );
-
-    const top10 = sorted.slice(0, 10);
-    if (top10.length >= 2) [top10[0], top10[1]] = [top10[1], top10[0]];
-
-    cachedData = top10.map(entry => ({
-      username: maskUsername(entry.username),
-      wagered: Math.round(parseFloat(entry.wagered_amount)),
-      weightedWager: Math.round(parseFloat(entry.wagered_amount)),
-    }));
-
-    console.log(`[✅] Leaderboard updated`);
-  } catch (err) {
-    console.error("[❌] Failed to fetch Rainbet data:", err.message);
-    // keep last good cache
+    const { start, end } = getCycle(0);
+    cachedData = await fetchWindow(start, end);
+    console.log(`[✅] Cached cycle ${ymdUTC(start)} → ${ymdUTC(end)}`);
+  } catch (e) {
+    console.error("[❌] Update failed:", e.message);
   }
 }
+fetchAndCache();
+setInterval(fetchAndCache, 5 * 60 * 1000);
 
-fetchAndCacheData();
-setInterval(fetchAndCacheData, 5 * 60 * 1000); // every 5 minutes
-
-// ---------- routes (same responses; only the /prev window changed) ----------
-app.get("/leaderboard/top14", (req, res) => {
-  res.json(cachedData);
-});
+// Routes
+app.get("/leaderboard/top14", (req, res) => res.json(cachedData));
 
 app.get("/leaderboard/prev", async (req, res) => {
   try {
-    const nowMs = Date.now();
-    const { startDate, endDate, k } = getCycleBounds(-1, nowMs);
-
-    // If previous cycle ends before the base start → no data yet
-    if (endDate.getTime() < BASE_START_MS) {
-      console.log("[↩] PREV: before base start → []");
-      return res.json([]);
-    }
-
-    const startStr = ymdUTC(startDate);
-    const endStr = ymdUTC(endDate);
-    const url = `https://services.rainbet.com/v1/external/affiliates?start_at=${startStr}&end_at=${endStr}&key=${API_KEY}`;
-    console.log(`[↩] PREV URL: ${url}`);
-
-    const response = await fetch(url);
-    const json = await response.json();
-
-    if (!json.affiliates) throw new Error("No previous data");
-
-    const sorted = json.affiliates.sort(
-      (a, b) => parseFloat(b.wagered_amount) - parseFloat(a.wagered_amount)
-    );
-
-    const top10 = sorted.slice(0, 10);
-    if (top10.length >= 2) [top10[0], top10[1]] = [top10[1], top10[0]];
-
-    const processed = top10.map(entry => ({
-      username: maskUsername(entry.username),
-      wagered: Math.round(parseFloat(entry.wagered_amount)),
-      weightedWager: Math.round(parseFloat(entry.wagered_amount)),
-    }));
-
-    res.json(processed);
-  } catch (err) {
-    console.error("[❌] Failed to fetch previous leaderboard:", err.message);
-    res.status(500).json({ error: "Failed to fetch previous leaderboard data." });
+    const { start, end } = getCycle(-1);
+    if (end.getTime() < BASE_START) return res.json([]);
+    const data = await fetchWindow(start, end);
+    res.json(data);
+  } catch (e) {
+    console.error("[❌] Prev failed:", e.message);
+    res.status(500).json({ error: "Failed to fetch previous data" });
   }
 });
 
-// ---------- keep-alive (unchanged) ----------
+// Keep-alive
 setInterval(() => {
-  fetch(SELF_URL)
-    .then(() => console.log(`[🔁] Self-pinged ${SELF_URL}`))
-    .catch(err => console.error("[⚠️] Self-ping failed:", err.message));
-}, 270000); // every 4.5 mins
+  fetch(SELF_URL).catch(() => {});
+}, 270000);
 
 app.listen(PORT, () => console.log(`🚀 Running on port ${PORT}`));
