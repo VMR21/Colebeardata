@@ -20,10 +20,12 @@ app.use((req, res, next) => {
   next();
 });
 
-function maskUsername(username) {
-  if (!username) return "";
+// ---------- helpers ----------
+function maskUsername(username = "") {
   if (username.length <= 4) return username;
-  return username.slice(0, 2) + "***" + username.slice(-2);
+  return (
+    username.slice(0, 2) + "***" + username.slice(-2) // Po***es style
+  );
 }
 function ymdUTC(date) {
   return date.toISOString().slice(0, 10);
@@ -34,7 +36,6 @@ function getCycle(offset = 0, nowMs = Date.now()) {
   const end = new Date(start.getTime() + CYCLE_MS - 1);
   return { start, end };
 }
-
 function buildUrl(start, end) {
   return `https://services.rainbet.com/v1/external/affiliates?start_at=${ymdUTC(
     start
@@ -53,7 +54,6 @@ async function fetchWindow(start, end) {
     (a, b) => parseFloat(b.wagered_amount) - parseFloat(a.wagered_amount)
   );
   const top10 = sorted.slice(0, 10);
-  if (top10.length >= 2) [top10[0], top10[1]] = [top10[1], top10[0]];
 
   return top10.map((e) => ({
     username: maskUsername(e.username),
@@ -66,7 +66,7 @@ async function fetchAndCache() {
   try {
     const { start, end } = getCycle(0);
     cachedData = await fetchWindow(start, end);
-    console.log(`[✅] Cached cycle ${ymdUTC(start)} → ${ymdUTC(end)}`);
+    console.log(`[✅] Cached ${ymdUTC(start)} → ${ymdUTC(end)}`);
   } catch (e) {
     console.error("[❌] Update failed:", e.message);
   }
