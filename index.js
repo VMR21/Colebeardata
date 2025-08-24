@@ -10,6 +10,14 @@ const API_KEY = "rKCvnPfyGUNl0W6Gj17uaKaHyY3jIilI";
 let cachedData = [];
 let cachedPrevData = [];
 
+// ✅ CORS headers manually
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  next();
+});
+
 // ===== UTILITIES =====
 function maskUsername(username = "") {
   if (username.length <= 4) return username;
