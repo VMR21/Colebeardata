@@ -87,8 +87,6 @@ async function fetchLeaderboard(startDate, endDate) {
   // Get top 10
   const top10 = sorted.slice(0, 10);
 
-  // Swap rank 1 and 2 if needed
-  if (top10.length >= 2) [top10[0], top10[1]] = [top10[1], top10[0]];
 
   // Return formatted
   return top10.map(entry => ({
